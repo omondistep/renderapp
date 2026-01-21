@@ -1,10 +1,8 @@
 # app.py - Web API version for Render
-import sys
 import re
 import math
 import requests
 from bs4 import BeautifulSoup
-from playwright.sync_api import sync_playwright
 from collections import namedtuple
 from datetime import datetime
 import statistics
@@ -12,7 +10,6 @@ from typing import List, Dict, Tuple, Optional
 from dataclasses import dataclass
 from flask import Flask, request, jsonify, render_template_string
 import os
-import json
 
 Match = namedtuple('Match', ['date', 'home_team', 'away_team', 'score', 'result', 'goals_scored', 'goals_conceded', 'venue', 'competition', 'opponent_position'])
 
@@ -755,46 +752,8 @@ class ForebetAnalyzer:
         self.decision_engine = DecisionEngine()
         self.league_standings = {}
     
-    def fetch_with_playwright_lightweight(self, url: str):
-        """Fetch page using Playwright for JavaScript-rendered content"""
-        try:
-            # For Render, use DISPLAY environment variable
-            import os
-            if os.environ.get('RENDER'):
-                # On Render, we need to use headless mode with specific args
-                os.environ['PLAYWRIGHT_BROWSERS_PATH'] = '0'
-            
-            with sync_playwright() as p:
-                browser = p.chromium.launch(
-                    headless=True, 
-                    args=[
-                        '--no-sandbox',
-                        '--disable-setuid-sandbox',
-                        '--disable-dev-shm-usage',
-                        '--disable-gpu',
-                        '--disable-accelerated-2d-canvas',
-                        '--no-first-run',
-                        '--no-zygote',
-                        '--single-process',
-                        '--disable-blink-features=AutomationControlled'
-                    ]
-                )
-                context = browser.new_context(
-                    user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                    viewport={'width': 1920, 'height': 1080}
-                )
-                page = context.new_page()
-                page.goto(url, timeout=30000, wait_until='domcontentloaded')
-                page.wait_for_timeout(3000)
-                html = page.content()
-                browser.close()
-                return html if len(html) >= 1000 else None
-        except Exception as e:
-            print(f"Playwright error: {e}")
-            return None
-    
-    def fetch_with_requests(self, url: str):
-        """Fallback fetch using requests"""
+    def fetch_page_soup(self, url: str):
+        """Fetch page using requests only (works on Render)"""
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
@@ -809,28 +768,27 @@ class ForebetAnalyzer:
             'Sec-Fetch-User': '?1',
             'Cache-Control': 'max-age=0'
         }
+        
         try:
             response = requests.get(url, headers=headers, timeout=30)
             response.raise_for_status()
-            return response.text
-        except Exception as e:
-            print(f"Requests error: {e}")
-            return None
-    
-    def fetch_page_soup(self, url: str):
-        """Fetch page and return BeautifulSoup object"""
-        # On Render, try Playwright first
-        html = self.fetch_with_playwright_lightweight(url)
-        if not html:
-            html = self.fetch_with_requests(url)
-        if not html:
-            return None
-        
-        try:
+            html = response.text
+            
+            # If page looks empty, try with different headers
+            if len(html) < 1000:
+                # Try with simpler headers
+                headers = {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+                }
+                response = requests.get(url, headers=headers, timeout=30)
+                html = response.text
+            
             soup = BeautifulSoup(html, "html.parser")
             return soup
+            
         except Exception as e:
-            print(f"Parse error: {e}")
+            print(f"Error fetching page: {e}")
             return None
     
     def clean_team_name(self, name: str):
